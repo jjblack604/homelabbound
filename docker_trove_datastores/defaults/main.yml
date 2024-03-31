@@ -1,0 +1,85 @@
+---
+# Defaults file for trove_configure
+
+# Docker Registry Configuration
+trove_docker_repository: docker.example.com # Can be an IP and port as well, e.g., 192.168.10.100:1234
+trove_registry_name: "trove-datastores"
+
+# Docker Registry Authentication
+trove_docker_htpasswd_path: /opt/docker/auth
+trove_docker_htpasswd_file: htpasswd
+trove_docker_htpasswd_user: admin
+trove_docker_htpasswd_passwd: replace_me
+
+# Docker Daemon Configuration
+trove_docker_config:
+  insecure-registries: "localhost:5000" # List of insecure Docker registries
+  dns:
+    - "8.8.8.8" # Primary DNS
+    - "8.8.4.4" # Secondary DNS
+
+# Docker Ports Configuration
+trove_docker_external_port_map: 5000 # External port for Docker registry access
+trove_docker_internal_port_map: 5000 # Internal port the Docker registry listens on
+
+# Trove Datastores Configuration
+trove_containers:
+  - datastore_name: mariadb
+    version: 10.4
+    append_version: false
+    os: ubuntu
+    os_version: 20.04
+  - datastore_name: mariadb
+    version: 10.6
+    append_version: false
+    os: ubuntu
+    os_version: 20.04
+  - datastore_name: mariadb
+    version: 11.3.2
+    append_version: false
+    os: ubuntu
+    os_version: 22.04
+  - datastore_name: mysql
+    version: 8.0
+    os: ubuntu
+    os_version: 20.04
+    percona_xtrabackup_version: 80
+  - datastore_name: mysql
+    version: 8.3
+    os: ubuntu
+    os_version: 22.04
+    percona_xtrabackup_version: 83
+  - datastore_name: postgresql
+    docker_hub_name: postgres
+    version: 12
+    os: ubuntu
+    os_version: 20.04
+  # Note: The following PostgreSQL versions are currently not working
+  # - datastore_name: postgresql
+  #   docker_hub_name: postgres
+  #   version: 13
+  #   os: ubuntu
+  #   os_version: 20.04
+  # - datastore_name: postgresql
+  #   docker_hub_name: postgres
+  #   version: 14
+  #   os: ubuntu
+  #   os_version: 20.04
+  # - datastore_name: postgresql
+  #   docker_hub_name: postgres
+  #   version: 15
+  #   os: ubuntu
+  #   os_version: 20.04
+  # - datastore_name: postgresql
+  #   docker_hub_name: postgres
+  #   version: 16
+  #   os: ubuntu
+  #   os_version: 20.04
+
+# Directory Configuration for Build and Logs
+trove_repo_destination_directory: /root/trove # Destination directory for Trove repo clone
+trove_build_directory: /root/trove_build # Base directory for building datastore images
+trove_docker_build_logs: "{{ trove_build_directory }}/logs" # Directory for build logs
+
+# Maintainer Information
+trove_image_maintainer: "cloud@example.com"

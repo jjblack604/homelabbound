@@ -1,0 +1,189 @@
+---
+
+- name: Install Required Packages
+  become: true
+  package:
+    name:
+      - docker.io
+      - apache2-utils
+      - python3-passlib
+    state: present
+
+- name: Start docker
+  become: true
+  systemd:
+    name: docker.io
+    daemon_reload: true
+
+- name: Template DockerFile to trove/backups for each datastore
+  become: true
+  template:
+    src: daemon.json.j2
+    dest: "/etc/docker/daemon.json"
+    owner: root
+    group: root
+    mode: "0640"
+  notify: restart docker
+
+- name: Create directory for htpasswd file
+  become: true
+  ansible.builtin.file:
+    path: "{{ trove_docker_htpasswd_path }}"
+    state: directory
+    mode: '0755'
+    owner: root
+    group: root
+
+- name: Create htpasswd file and add user
+  become: true
+  community.general.htpasswd:
+    path: "{{ trove_docker_htpasswd_path }}/htpasswd"
+    name: "{{ trove_docker_htpasswd_user }}"
+    password: "{{ trove_docker_htpasswd_passwd }}"
+    mode: "0644"
+    owner: root
+    group: root
+    create: yes
+    crypt_scheme: bcrypt
+  notify: restart docker
+
+- meta: flush_handlers 
+
+- name: Run Docker registry container with htpasswd authentication
+  become: true
+  community.general.docker_container:
+    name: registry
+    image: registry:2
+    restart_policy: always
+    state: started
+    ports:
+      - "{{ trove_docker_external_port_map }}:{{ trove_docker_internal_port_map }}"
+    volumes:
+      - "{{ trove_docker_htpasswd_path }}/htpasswd:/auth/htpasswd:ro"
+    env:
+      REGISTRY_AUTH: "htpasswd"
+      REGISTRY_AUTH_HTPASSWD_REALM: "Registry Realm"
+      REGISTRY_AUTH_HTPASSWD_PATH: "/auth/htpasswd"
+
+- name: Log into Docker registry
+  become: true
+  community.general.docker_login:
+    registry_url: "{{ trove_docker_repository }}"
+    username: "{{ trove_docker_htpasswd_user }}"
+    password: "{{ trove_docker_htpasswd_passwd }}"
+
+- name: Create directories for each datastore
+  ansible.builtin.file:
+    path: "{{ trove_build_directory }}/{{ item.datastore_name }}_{{ item.version }}"
+    state: directory
+    mode: '0755'
+  loop: "{{ trove_containers }}"
+  become: true
+
+- name: Create docker build log directory
+  ansible.builtin.file:
+    path: "{{ trove_docker_build_logs }}"
+    state: directory
+    mode: '0750'
+  become: true
+
+- name: Clone Trove repository and checkout a specific branch
+  git:
+    repo: "https://github.com/openstack/trove.git"
+    dest: "{{ trove_repo_destination_directory }}"
+    version: 'master'
+    force: true
+  become: true
+
+- name: Copy cloned repository to each datastore directory
+  ansible.builtin.copy:
+    src: "{{ trove_repo_destination_directory }}/"
+    dest: "{{ trove_build_directory }}/{{ item.datastore_name }}_{{ item.version }}/"
+    remote_src: yes
+    mode: '0755'
+  loop: "{{ trove_containers }}"
+  become: true
+
+- name: Template DockerFile to trove/backups for each datastore
+  become: true
+  template:
+    src: Dockerfile.yml.j2
+    dest: "{{ trove_build_directory }}/{{ item.datastore_name }}_{{ item.version }}/backup/Dockerfile"
+    mode: "0755"
+  loop: "{{ trove_containers }}"
+
+- name: Template install.sh script to trove/backups
+  become: true
+  template:
+    src: install.sh.j2
+    dest: "{{ trove_build_directory }}/{{ item.datastore_name }}_{{ item.version }}/backup/install.sh"
+    mode: "0755"
+  loop: "{{ trove_containers }}"
+
+- name: Pull datastore images from DockerHub
+  become: true
+  community.docker.docker_image:
+    name: "{{ item.docker_hub_name | default(item.datastore_name) }}:{{ item.version }}"
+    source: pull
+  loop: "{{ trove_containers }}"
+
+- name: Ensure local images are correctly tagged for pushing
+  become: true
+  community.docker.docker_image:
+    name: "{{ item.docker_hub_name | default(item.datastore_name) }}:{{ item.version }}"
+    repository: "{{ trove_docker_repository }}/{{ trove_registry_name }}/{{ item.datastore_name }}:{{ item.version }}"
+    tag: "{{ item.version }}"
+    source: local
+    push: yes
+  loop: "{{ trove_containers }}"
+
+# opted to use shell as there is no log to file which is irritating
+# when wanting to tail logs or keep history during image build
+- name: Check if Docker image already exists otherwise build
+  become: true
+  ansible.builtin.shell: |
+    if ! docker image inspect "{{ trove_docker_repository }}/{{ trove_registry_name }}/db-backup-{{ item.datastore_name }}:{{ item.version }}" &> /dev/null; then
+      TIMESTAMP=$(date +%Y%m%d%H%M%S)
+      LOGFILE="{{ trove_docker_build_logs }}/{{ item.datastore_name }}-{{ item.version }}.build_$TIMESTAMP.log"
+      docker build \
+        --build-arg DATASTORE="{{ item.datastore_name }}" \
+        --build-arg DATASTORE_VERSION="{{ item.version }}" \
+        -t "{{ trove_docker_repository }}/{{ trove_registry_name }}/db-backup-{{ item.datastore_name }}:{{ item.version }}" \
+        -f "{{ trove_build_directory }}/{{ item.datastore_name }}_{{ item.version }}/backup/Dockerfile" \
+        "{{ trove_build_directory }}/{{ item.datastore_name }}_{{ item.version }}/backup" &> "$LOGFILE"
+      echo added
+    else
+      echo "Image already exists: {{ trove_docker_repository }}/{{ trove_registry_name }}/db-backup-{{ item.datastore_name }}:{{ item.version }}"
+    fi
+  loop: "{{ trove_containers }}"
+  register: _check_and_build
+  changed_when: "'added' in _check_and_build.stdout"
+  args:
+    executable: /bin/bash
+
+# - name: Build and tag Docker image if it does not exist
+#   community.docker.docker_image:
+#     build:
+#       path: "{{ trove_build_directory }}/{{ item.datastore_name }}_{{ item.version }}/backup"
+#       dockerfile: "{{ trove_build_directory }}/{{ item.datastore_name }}_{{ item.version }}/backup/Dockerfile"
+#       args:
+#         DATASTORE: "{{ item.datastore_name }}"
+#         DATASTORE_VERSION: "{{ item.version }}"
+#     name: "{{ trove_docker_repository }}/{{ trove_registry_name }}/db-backup-{{ item.datastore_name }}-{{ item.version }}"
+#     tag: "{{ item.tag }}"
+#     push: yes
+#     source: build
+#   loop: "{{ trove_containers }}"
+
+- name: Push backup image
+  become: true
+  community.docker.docker_image:
+    name: "{{ trove_docker_repository }}/{{ trove_registry_name }}/db-backup-{{ item.datastore_name }}"
+    repository: "{{ trove_docker_repository }}/{{ trove_registry_name }}/db-backup-{{ item.datastore_name }}"
+    tag: "{{ item.version }}"
+    push: yes
+    source: local
+  loop: "{{ trove_containers }}"
+
+# TODO automate cleanup
+# prune/cleanup

@@ -1,0 +1,4 @@
+{
+  "insecure-registries": ["{{ trove_docker_config['insecure-registries'] }}"],
+  "dns": [{{ trove_docker_config['dns'] | map('tojson') | join(', ') }}]
+}

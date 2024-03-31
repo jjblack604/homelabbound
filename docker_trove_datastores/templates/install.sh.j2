@@ -1,0 +1,43 @@
+# This is Master branch modified
+# https://github.com/openstack/trove/commit/1062b035ce91016ea85fc7bce8f00c3376c2db91
+
+#!/usr/bin/env bash
+set -e
+
+export APT_KEY_DONT_WARN_ON_DANGEROUS_USAGE=1
+OS_RELEASE_CODENAME=$(lsb_release -sc)
+
+{% if item.datastore_name == "mysql" %}
+# Install Percona XtraBackup for MySQL
+curl -sSL https://repo.percona.com/apt/percona-release_latest.${OS_RELEASE_CODENAME}_all.deb -o percona-release.deb
+dpkg -i percona-release.deb
+apt-get update
+percona-release enable-only tools release
+apt-get update
+apt-get install -y -qq --no-install-recommends --allow-unauthenticated percona-xtrabackup-{{ item.percona_xtrabackup_version }}
+rm -f percona-release.deb
+
+{% elif item.datastore_name == "mariadb" %}
+# Install MariaDB backup tool
+# See the url below about the supported version.
+# https://mariadb.com/docs/xpand/ref/repo/cli/mariadb_repo_setup/mariadb-server-version/
+apt-key adv --fetch-keys 'https://mariadb.org/mariadb_release_signing_key.asc'
+if curl -LsS -O https://downloads.mariadb.com/MariaDB/mariadb_repo_setup && chmod u+x ./mariadb_repo_setup && ./mariadb_repo_setup --mariadb-server-version={{ item.version }}; then
+    apt-get update
+    apt-get install -y -qq --no-install-recommends --allow-unauthenticated mariadb-backup
+else
+    echo "Failed to setup MariaDB repository or install mariadb-backup"
+    exit 1
+fi
+
+{% elif item.datastore_name == "postgresql" %}
+# See here for the supported version
+# https://www.postgresql.org/support/versioning/
+apt-key adv --fetch-keys 'https://www.postgresql.org/media/keys/ACCC4CF8.asc'
+add-apt-repository "deb [arch=amd64] http://apt.postgresql.org/pub/repos/apt/ ${OS_RELEASE_CODENAME}-pgdg main"
+apt-get update
+apt-get install -y -qq --no-install-recommends --allow-unauthenticated postgresql-client-{{ item.version }}
+{% endif %}
+
+apt-get clean
+rm -rf /var/lib/apt/lists/*
